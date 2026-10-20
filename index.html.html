@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CDN Cache Simulator: FIFO vs LRU</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--bg:#f6f7fb;--card:#fff;--ink:#14213d;--mut:#5b6478;--line:#d9deea;--hit:#1b8a5a;--hitbg:#dff3e8;--miss:#c0392b;--missbg:#fbe4e1;--acc:#2a4fd6;--slot:#eef1f9}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1424;--card:#171e35;--ink:#e8ecf8;--mut:#9aa5c3;--line:#2b3556;--hit:#4cd49a;--hitbg:#12382b;--miss:#ff7b6b;--missbg:#411d1b;--acc:#7f9bff;--slot:#1f2845}}
+:root[data-theme="dark"]{--bg:#0f1424;--card:#171e35;--ink:#e8ecf8;--mut:#9aa5c3;--line:#2b3556;--hit:#4cd49a;--hitbg:#12382b;--miss:#ff7b6b;--missbg:#411d1b;--acc:#7f9bff;--slot:#1f2845}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:980px;margin:0 auto;padding:20px 16px 40px}
+h1{font:700 1.7rem/1.2 Georgia,"Times New Roman",serif;margin:0 0 4px}
+.sub{color:var(--mut);margin:0 0 18px}
+.ctl{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;display:grid;gap:12px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:end}
+label{display:flex;flex-direction:column;font-size:.85rem;color:var(--mut);gap:4px}
+input{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+#seq{width:min(100%,380px)}#size{width:80px}
+button{font:inherit;font-weight:600;cursor:pointer;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:8px 14px}
+button.p{background:var(--acc);border-color:var(--acc);color:#fff}
+button:focus-visible,input:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+.pre button{font-weight:500;font-size:.88rem;padding:6px 10px}
+.err{color:var(--miss);min-height:1.2em;font-size:.9rem;margin:0}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}
+@media(max-width:720px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;min-width:0}
+.panel h2{font:700 1.2rem Georgia,serif;margin:0 0 2px}
+.panel .d{color:var(--mut);font-size:.85rem;margin:0 0 12px}
+.now{display:flex;align-items:center;gap:10px;margin-bottom:10px;min-height:34px}
+.badge{font-weight:700;border-radius:999px;padding:2px 12px;font-size:.9rem}
+.badge.h{background:var(--hitbg);color:var(--hit)}.badge.m{background:var(--missbg);color:var(--miss)}
+.slots{display:flex;gap:8px;margin-bottom:6px}
+.slot{flex:1;min-width:0;height:62px;border:2px dashed var(--line);border-radius:10px;background:var(--slot);display:flex;align-items:center;justify-content:center;font:700 1.5rem Georgia,serif;position:relative;transition:transform .15s}
+.slot.f{border-style:solid;border-color:var(--acc)}
+.slot.new{transform:translateY(-4px);border-color:var(--hit);color:var(--hit)}
+.slot small{position:absolute;bottom:2px;font:500 .62rem system-ui;color:var(--mut)}
+.ev{color:var(--miss);font-size:.85rem;min-height:1.3em;margin:0 0 10px}
+.stats{display:flex;gap:16px;flex-wrap:wrap;margin:10px 0}
+.stats div{font-size:.85rem;color:var(--mut)}.stats b{display:block;font-size:1.25rem;color:var(--ink)}
+.chips{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px}
+.chip{width:30px;height:30px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.9rem;background:var(--slot);color:var(--mut)}
+.chip.h{background:var(--hitbg);color:var(--hit)}.chip.m{background:var(--missbg);color:var(--miss)}
+.chip.cur{outline:2px solid var(--ink)}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.88rem}
+th,td{padding:5px 8px;text-align:center;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--mut);font-weight:600}
+td.h{color:var(--hit);font-weight:700}td.m{color:var(--miss)}
+tr.cur td{background:var(--slot)}
+.sum{margin-top:16px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.sum p{margin:0 0 6px}
+.bar{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:.88rem}
+.bar span:first-child{width:44px}.bar i{display:block;height:14px;border-radius:7px;background:var(--acc);transition:width .3s}
+.bar span:last-child{color:var(--mut)}
+</style>
+</head>
+<body>
+<main>
+<h1>CDN Cache Simulator</h1>
+<p class="sub">Step through the same video requests on a FIFO cache and an LRU cache and compare hits and misses.</p>
+
+<section class="ctl" aria-label="Controls">
+ <div class="row">
+  <label>Request sequence (comma separated)<input id="seq" value="1,2,3,4,1,2,5,1,2,3,4,5" inputmode="numeric"></label>
+  <label>Cache size<input id="size" type="number" min="1" max="8" value="3"></label>
+  <button class="p" id="load">Load</button>
+ </div>
+ <div class="row pre">
+  <span style="color:var(--mut);font-size:.85rem">Examples:</span>
+  <button data-s="1,2,3,4,1,2,5,1,2,3,4,5" data-n="3">Case study (size 3)</button>
+  <button data-s="1,2,3,4,1,2,5,1,2,3,4,5" data-n="4">Same, size 4</button>
+  <button data-s="9,1,9,2,9,3,9,4,9,5" data-n="3">Viral video 9</button>
+ </div>
+ <div class="row">
+  <button id="prev">Back</button>
+  <button class="p" id="next">Next request</button>
+  <button id="play">Auto play</button>
+  <button id="all">Show all</button>
+  <button id="reset">Reset</button>
+ </div>
+ <p class="err" id="err" role="alert"></p>
+</section>
+
+<div class="grid" id="grid"></div>
+<section class="sum" id="sum" aria-live="polite"></section>
+</main>
+<script>
+let seq=[],size=3,k=0,timer=null,runs={};
+const $=id=>document.getElementById(id);
+function sim(policy){const cache=[],out=[];let h=0;
+ for(const r of seq){const i=cache.indexOf(r);let ev=null,hit=i>-1;
+  if(hit){h++;if(policy==="LRU"){cache.splice(i,1);cache.push(r)}}
+  else{if(cache.length===size)ev=cache.shift();cache.push(r)}
+  out.push({r,c:[...cache],hit,ev})}
+ return{steps:out,hits:h}}
+function load(){stop();const raw=$("seq").value.split(/[,\s]+/).filter(Boolean);
+ const n=parseInt($("size").value,10);
+ if(!raw.length||raw.some(x=>!/^\d+$/.test(x))){$("err").textContent="Enter video numbers separated by commas, for example 1,2,3.";return}
+ if(!(n>=1&&n<=8)){$("err").textContent="Cache size must be between 1 and 8.";return}
+ if(raw.length>40){$("err").textContent="Use at most 40 requests.";return}
+ $("err").textContent="";seq=raw.map(Number);size=n;k=0;
+ runs={FIFO:sim("FIFO"),LRU:sim("LRU")};render()}
+function panel(name,desc){const run=runs[name],cur=k?run.steps[k-1]:null;
+ const sl=[];for(let i=0;i<size;i++){const v=cur?cur.c[i]:undefined;
+  const isNew=cur&&!cur.hit&&v===cur.r;
+  sl.push(`<div class="slot ${v!==undefined?"f":""} ${isNew?"new":""}">${v??""}<small>${name==="FIFO"?(i==0?"oldest":i==size-1?"newest":""):(i==0?"least recent":i==size-1?"most recent":"")}</small></div>`)}
+ const hits=run.steps.slice(0,k).filter(s=>s.hit).length;
+ const chips=run.steps.map((s,i)=>`<div class="chip ${i<k?(s.hit?"h":"m"):""} ${i==k-1?"cur":""}" title="${s.hit?"Hit":"Miss"}">${s.r}</div>`).join("");
+ const rows=run.steps.slice(0,k).map((s,i)=>`<tr class="${i==k-1?"cur":""}"><td>${i+1}</td><td>${s.r}</td><td>[${s.c.join(", ")}]</td><td>${s.ev??"-"}</td><td class="${s.hit?"h":"m"}">${s.hit?"Hit":"Miss"}</td></tr>`).join("");
+ return `<section class="panel"><h2>${name}</h2><p class="d">${desc}</p>
+ <div class="now">${cur?`<span>Request <b>${cur.r}</b></span><span class="badge ${cur.hit?"h":"m"}">${cur.hit?"Hit":"Miss"}</span>`:`<span style="color:var(--mut)">Press Next request to start</span>`}</div>
+ <div class="slots">${sl.join("")}</div>
+ <p class="ev">${cur&&cur.ev!==null?"Video "+cur.ev+" evicted":""}</p>
+ <div class="chips">${chips}</div>
+ <div class="stats"><div><b>${hits}</b>hits</div><div><b>${k-hits}</b>misses</div><div><b>${k?(100*hits/k).toFixed(1):"0.0"}%</b>hit ratio</div></div>
+ <div class="tw"><table><thead><tr><th>Step</th><th>Request</th><th>Cache</th><th>Evicted</th><th>Result</th></tr></thead><tbody>${rows||`<tr><td colspan="5" style="color:var(--mut)">No requests processed yet</td></tr>`}</tbody></table></div></section>`}
+function render(){
+ $("grid").innerHTML=panel("FIFO","Evicts the video that entered first.")+panel("LRU","Evicts the video used longest ago.");
+ const f=runs.FIFO.steps.slice(0,k).filter(s=>s.hit).length,l=runs.LRU.steps.slice(0,k).filter(s=>s.hit).length;
+ let msg;if(!k)msg="Processed 0 of "+seq.length+" requests.";
+ else{const d=f-l;msg=`After ${k} of ${seq.length} requests: `+(d>0?`FIFO is ahead by ${d} hit${d>1?"s":""}.`:d<0?`LRU is ahead by ${-d} hit${d<-1?"s":""}.`:"both policies have the same number of hits.")}
+ const pct=x=>k?100*x/k:0;
+ $("sum").innerHTML=`<p><b>${msg}</b></p>
+ <div class="bar"><span>FIFO</span><i style="width:${pct(f)*2}px;max-width:60%"></i><span>${pct(f).toFixed(1)}%</span></div>
+ <div class="bar"><span>LRU</span><i style="width:${pct(l)*2}px;max-width:60%"></i><span>${pct(l).toFixed(1)}%</span></div>
+ <p style="color:var(--mut);font-size:.88rem;margin-top:10px">Case study sequence at size 3: FIFO gets 3 hits and LRU gets 2, because the looping pattern is a bad case for LRU. Try the viral video example to see LRU keep the popular video in the cache.</p>`}
+function step(d){if(!seq.length)return;k=Math.max(0,Math.min(seq.length,k+d));render();if(k===seq.length)stop()}
+function stop(){if(timer){clearInterval(timer);timer=null}$("play").textContent="Auto play"}
+$("load").onclick=load;
+$("next").onclick=()=>{stop();step(1)};$("prev").onclick=()=>{stop();step(-1)};
+$("reset").onclick=()=>{stop();k=0;render()};
+$("all").onclick=()=>{stop();k=seq.length;render()};
+$("play").onclick=()=>{if(timer){stop();return}if(k>=seq.length)k=0;$("play").textContent="Pause";timer=setInterval(()=>step(1),900)};
+document.querySelectorAll(".pre button").forEach(b=>b.onclick=()=>{$("seq").value=b.dataset.s;$("size").value=b.dataset.n;load()});
+$("seq").addEventListener("keydown",e=>{if(e.key==="Enter")load()});
+load();
+</script>
+</body>
+</html>
